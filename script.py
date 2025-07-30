@@ -1,96 +1,94 @@
 import os
-import csv
 import logging
-from datetime import datetime
+import smtplib
+from email.message import EmailMessage
+from datetime import datetime, timedelta
+import csv
 
-# Configure logging
-logging.basicConfig(filename='todo_list.log', level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configuration
+TODO_FILE = 'todos.csv'
+LOG_FILE = 'todo_app.log'
+SMTP_SERVER = 'smtp.example.com'
+SMTP_PORT = 587
+EMAIL_ADDRESS = 'your_email@example.com'
+EMAIL_PASSWORD = 'your_password'
 
-class Task:
-    def __init__(self, description, due_date=None, priority=None, category=None):
-        self.description = description
-        self.due_date = due_date
-        self.priority = priority
-        self.category = category
-        self.completed = False
+# Set up logging
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO)
 
-    def __str__(self):
-        return f"[{'X' if self.completed else ' '}] {self.description} - Due: {self.due_date}, Priority: {self.priority}, Category: {self.category}"
+def send_email(subject, body, to_address):
+    try:
+        msg = EmailMessage()
+        msg['Subject'] = subject
+        msg['From'] = EMAIL_ADDRESS
+        msg['To'] = to_address
+        msg.set_content(body)
 
-class TodoList:
-    def __init__(self, filename):
-        self.filename = filename
-        self.tasks = []
-        self.load_tasks()
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+            server.send_message(msg)
+        logging.info(f'Email sent: {subject} to {to_address}')
+    except Exception as e:
+        logging.error(f'Error sending email: {e}')
 
-    def load_tasks(self):
-        if os.path.exists(self.filename):
-            with open(self.filename, mode='r', newline='') as file:
-                reader = csv.reader(file)
-                for row in reader:
-                    if row:
-                        task = Task(description=row[0], due_date=row[1], priority=row[2], category=row[3])
-                        task.completed = row[4] == 'True'
-                        self.tasks.append(task)
-            logging.info("Tasks loaded successfully from file.")
-        else:
-            logging.warning("Task file does not exist, starting with an empty task list.")
+def load_todos():
+    todos = []
+    if os.path.exists(TODO_FILE):
+        with open(TODO_FILE, mode='r', newline='') as file:
+            reader = csv.reader(file)
+            for row in reader:
+                todos.append(row)
+    return todos
 
-    def save_tasks(self):
-        with open(self.filename, mode='w', newline='') as file:
-            writer = csv.writer(file)
-            for task in self.tasks:
-                writer.writerow([task.description, task.due_date, task.priority, task.category, task.completed])
-        logging.info("Tasks saved successfully to file.")
+def save_todos(todos):
+    with open(TODO_FILE, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        for todo in todos:
+            writer.writerow(todo)
 
-    def add_task(self, description, due_date, priority, category):
-        task = Task(description, due_date, priority, category)
-        self.tasks.append(task)
-        logging.info(f"Task added: {task}")
-        self.save_tasks()
+def add_todo(task, user_email):
+    todos = load_todos()
+    todos.append([task, 'incomplete', str(datetime.now())])
+    save_todos(todos)
+    send_email('Task Created', f'Your new task "{task}" has been created.', user_email)
 
-    def delete_task(self, description):
-        original_count = len(self.tasks)
-        self.tasks = [task for task in self.tasks if task.description != description]
-        if len(self.tasks) < original_count:
-            logging.info(f"Task deleted: {description}")
-            self.save_tasks()
-        else:
-            logging.warning(f"Task not found for deletion: {description}")
+def complete_todo(task, user_email):
+    todos = load_todos()
+    for i, todo in enumerate(todos):
+        if todo[0] == task:
+            todos[i][1] = 'complete'
+            save_todos(todos)
+            send_email('Task Completed', f'Congratulations! You have completed the task "{task}".', user_email)
+            break
 
-    def update_task(self, description, completed=None):
-        for task in self.tasks:
-            if task.description == description:
-                if completed is not None:
-                    task.completed = completed
-                    logging.info(f"Task updated: {task}")
-                    self.save_tasks()
-                return
-        logging.warning(f"Task not found for update: {description}")
+def upcoming_deadlines(user_email):
+    todos = load_todos()
+    now = datetime.now()
+    deadline_in_a_week = now + timedelta(days=7)
+    reminders = []
+    
+    for todo in todos:
+        if todo[1] == 'incomplete':
+            task_creation_time = datetime.fromisoformat(todo[2])
+            reminder_time = task_creation_time + timedelta(days=7)
+            if reminder_time <= deadline_in_a_week:
+                reminders.append(todo[0])
 
-    def list_tasks(self):
-        if not self.tasks:
-            logging.info("No tasks available.")
-            return "No tasks available."
-        return "\n".join(str(task) for task in self.tasks)
+    if reminders:
+        send_email('Upcoming Deadlines', 'Upcoming deadlines for your tasks: ' + ', '.join(reminders), user_email)
 
 def main():
-    todo_list = TodoList('tasks.csv')
+    logging.info('Starting Todo application')
+    user_email = 'user@example.com' 
 
-    todo_list.add_task('Finish project report', '2023-10-30', 'High', 'Work')
-    todo_list.add_task('Buy groceries', '2023-10-20', 'Medium', 'Personal')
-    todo_list.add_task('Call Mom', None, 'Low', 'Personal')
-
-    print("Current tasks:")
-    print(todo_list.list_tasks())
-
-    todo_list.update_task('Buy groceries', completed=True)
-    print("Updated tasks:")
-    print(todo_list.list_tasks())
-
-    todo_list.delete_task('Call Mom')
-    print("Final tasks after deletion:")
-    print(todo_list.list_tasks())
+    try:
+        add_todo('Buy groceries', user_email)
+        add_todo('Finish project report', user_email)
+        complete_todo('Buy groceries', user_email)
+        upcoming_deadlines(user_email)
+    except Exception as e:
+        logging.error(f'Error in main: {e}')
 
 if __name__ == "__main__":
     main()
